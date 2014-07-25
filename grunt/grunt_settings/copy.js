@@ -66,7 +66,7 @@ module.exports = function(src_root, debug_root, release_root){
         "img/**/*.gif"
       ]
     }),
-    release_shader: new DebugTemplate({
+    release_shader: new ReleaseTemplate({
       src: "shader/**/*.shader",
     })
   }
