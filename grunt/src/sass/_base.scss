@@ -1,0 +1,9 @@
+.wrapper{
+  font-family: $fontGothic;
+  position: relative;
+  @include box-sizing(border-box);
+  *{
+    position: relative;
+    @include box-sizing(border-box);
+  }
+}

@@ -1,0 +1,29 @@
+/*
+@include loadSpriteAll(
+  "smily", "*.png",
+  "spr-smily-background",
+  $scale: 0.5,
+  $animation: true
+);
+
+@include loadSpriteAll(
+  "smily", "*.png",
+  "spr-smily-dummy",
+  $scale: 0.5,
+  $dummy: true,
+  $animation: true
+);
+
+@include loadSpriteAll(
+  "smily", "*.png",
+  "spr-smily-translate",
+  $scale: 0.5,
+  $nest: true,
+  $animation: true
+);
+
+#top{
+  width: 100px;
+  height: 100px;
+}
+  */
