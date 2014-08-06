@@ -5118,16 +5118,15 @@ module.exports = Animation;
 },{}],5:[function(require,module,exports){
 var glMatrix = require("gl-matrix"),
     vec3 = glMatrix.vec3,
+    vec4 = glMatrix.vec4,
     mat4 = glMatrix.mat4,
     async = require("async"),
     WindowManager = require("./WindowManager"),
     ScriptLoader = require("./ScriptLoader"),
-    ShaderCompiler = require("./ShaderCompiler"),
-    ProgramLinker = require("./ProgramLinker"),
-    VBOManager = require("./VBOManager"),
-    AttributeSetter = require("./AttributeSetter"),
+    GLUtil = require("./GLUtil"),
     Camera = require("./Camera"),
-    Animation = require("./Animation");
+    Animation = require("./Animation"),
+    Easing = require("./Easing");
 
 var App = function(w){
   this.wm = new WindowManager(w);
@@ -5136,9 +5135,30 @@ var App = function(w){
 App.prototype = {
   "start": function(callback){
     async.series([
+      this.loadTexture.bind(this),
       this.loadShader.bind(this),
       this.main.bind(this)
     ]);
+  },
+  "loadTexture": function(callback){
+    var dis = this,
+        canvas = document.createElement("canvas"),
+        ctx = canvas.getContext("2d"),
+        imgEarthMap = document.createElement("img");
+    imgEarthMap.src = "./img/earth-map.jpg";
+    imgEarthMap.addEventListener("load", function(){
+      var w = imgEarthMap.width,
+          h = imgEarthMap.height;
+
+      canvas.width = w;
+      canvas.height = h;
+      
+      ctx.drawImage(imgEarthMap, 0, 0, w, h);
+
+      dis.imageDataEarth = ctx.getImageData(0, 0, w, h);
+      callback();
+    });
+    
   },
   "loadShader": function(callback){
     var sl = new ScriptLoader([
@@ -5165,19 +5185,22 @@ App.prototype = {
     gl.clearColor(0.0, 0.0, 0.0, 1.0);
     gl.clearDepth(1.0);
     gl.enable(gl.CULL_FACE);
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthFunc(gl.LEQUAL);
 
-    var sc = new ShaderCompiler(gl);
-    var vertexShader = sc.compile(
+    var glUtil = new GLUtil(gl);
+
+    var vertexShader = glUtil.getShader(
         document.getElementById("shader-vertex").text,
         gl.VERTEX_SHADER
         );
-    var fragmentShader = sc.compile(
+    var fragmentShader = glUtil.getShader(
         document.getElementById("shader-fragment").text,
         gl.FRAGMENT_SHADER
         );
-
-    var pl = new ProgramLinker(gl);
-    var program = pl.link([
+    var program = gl.createProgram();
+    
+    glUtil.linkShaders(program, [
       vertexShader,
       fragmentShader
     ]);
@@ -5188,101 +5211,156 @@ App.prototype = {
     vec3.copy(camera.vUp, [0.0, 0.0, 1.0]);
 
     var vertexPosition = [
-      //plane 1
-      1, 1, 1,
-     -1, 1, 1,
-      1,-1, 1,
-     -1,-1, 1,
-      1,-1, 1,
-     -1, 1, 1,
-      //plane 6
-      1, 1,-1,
-      1,-1,-1,
-     -1, 1,-1,
-     -1,-1,-1,
-     -1, 1,-1,
-      1,-1,-1,
-      //plane 2
-      1, 1, 1,
-      1,-1, 1,
-      1, 1,-1,
-      1,-1,-1,
-      1, 1,-1,
-      1,-1, 1,
-      //plane 5
-     -1, 1, 1,
-     -1, 1,-1,
-     -1,-1, 1,
-     -1,-1,-1,
-     -1,-1, 1,
-     -1, 1,-1,
-      //plane 3
-      1, 1, 1,
-      1, 1,-1,
-     -1, 1, 1,
-     -1, 1,-1,
-     -1, 1, 1,
-      1, 1,-1,
-      //plane 4
-      1,-1, 1,
-     -1,-1, 1,
-      1,-1,-1,
-     -1,-1,-1,
-      1,-1,-1,
-     -1,-1, 1,
+      -1, -1, -1,
+      -1, -1,  1,
+      -1,  1, -1,
+      -1,  1,  1,
+       1, -1, -1,
+       1, -1,  1,
+       1,  1, -1,
+       1,  1,  1
     ];
 
-    var vbom = new VBOManager(gl);
-    var vbo = vbom.create(vertexPosition);
-    var as = new AttributeSetter(gl, program);
-    as.setVertex([
-      {
-        vbo: vbo,
-        stride: 3,
-        name: "position"
+    var vertexColor = [
+      1, 0, 0,
+      1, 0, 0,
+      1, 0, 0,
+      1, 0, 0,
+      1, 0, 0,
+      1, 0, 0,
+      1, 0, 0,
+      1, 0, 0,
+    ];
+
+    var indexVertex = [
+      //plane 1
+     7, 3, 5,
+     1, 5, 3,
+      //plane 6
+     6, 4, 2,
+     0, 2, 4,
+      //plane 2
+     7, 5, 6,
+     4, 6, 5,
+      //plane 5
+     3, 2, 1,
+     0, 1, 2,
+      //plane 3
+     7, 6, 3,
+     2, 3, 6,
+      //plane 4
+     5, 1, 4,
+     0, 4, 1,
+    ];
+
+    vertexPosition = [];
+    vertexColor = [];
+    vertexNormal = [];
+
+    var mRot = mat4.create();
+    var vVertex = vec3.create();
+
+    var bunkatsu = 200;
+
+    var imageDataEarth = this.imageDataEarth;
+    var data = imageDataEarth.data;
+    for(var y=0; y<bunkatsu; y++){
+      for(var x=0; x<bunkatsu*2; x++){
+        mat4.identity(mRot);
+        mat4.rotateZ(mRot, mRot, Math.PI/bunkatsu * x);
+        mat4.rotateY(mRot, mRot, Math.PI/(bunkatsu-1) * y);
+        vec3.copy(vVertex, [0, 0, 1]);
+        vec3.transformMat4(vVertex, vVertex, mRot);
+
+        var ix = x/2/bunkatsu * imageDataEarth.width | 0;
+        var iy = y/bunkatsu * imageDataEarth.height | 0;
+        var dataIndex = 4 * (iy * imageDataEarth.width + ix);
+        var r = data[dataIndex]/255;
+        var g = data[dataIndex+1]/255;
+        var b = data[dataIndex+2]/255;
+
+        vertexColor.push(r, g, b);
+        vec3.scale(vVertex, vVertex, 1+Math.random()*0.01+(g-b)*0.15);
+        vertexPosition.push.apply(vertexPosition, vVertex);
+        vertexNormal.push.apply(vertexNormal, vVertex);
       }
-    ]);
+    }
+    indexVertex = [];
+    for(var i=0, len=bunkatsu*2*(bunkatsu-1)-1; i < len; i++){
+       indexVertex.push(
+         i,i+bunkatsu*2,i+1
+       );
+       indexVertex.push(
+         i+1,i+bunkatsu*2,i+bunkatsu*2+1
+       );
+    }
+    indexVertex.push(
+      i,i+bunkatsu,i+1
+    );
+    console.log(indexVertex);
+
+
+    glUtil.setVBO(program, {
+      data: vertexPosition,
+      stride: 3,
+      name: "position"
+    });
+    glUtil.setVBO(program, {
+      data: vertexColor,
+      stride: 3,
+      name: "color"
+    });
+    glUtil.setVBO(program, {
+      data: vertexNormal,
+      stride: 3,
+      name: "normal"
+    });
+    glUtil.setIBO(program, {
+      data: indexVertex
+    });
+
     var uniMP = gl.getUniformLocation(program, "mP");
-    
+    var uniMPInv = gl.getUniformLocation(program, "mPInv");
+
+    var Rt1 = mat4.create();
+    var Rt2 = mat4.create();
+
+    var mPRt1 = mat4.create();
+    var mPRt2 = mat4.create();
+
+    var mPInv = mat4.create();
+    var mP = mat4.create();
+
+    mat4.translate(Rt1, Rt1, [0, 0, 0]);
+    mat4.translate(Rt2, Rt2, [0, -2, 0]);
+
     new Animation(function(t){
-      var rad = t * Math.PI*2;
-      camera.vPosition[0] = Math.cos(rad*3) * 3;
-      camera.vPosition[1] = Math.sin(rad*3) * 3;
-      camera.vPosition[2] = Math.cos(rad*2) * 3;
+      t = t;
+      var rad = t * Math.PI*2 + 0.7;
+      camera.vPosition[0] = Math.cos(rad*7) * 9;
+      camera.vPosition[1] = Math.sin(rad*7) * 9;
+      camera.vPosition[2] = 6;
+
+      mP = camera.calcMP();
+      mat4.identity(Rt1);
+      mat4.identity(mPInv);
+
+      mat4.rotateZ(Rt1, Rt1, -t*Math.PI*50);
+
+      mat4.mul(mPRt1, mP, Rt1);
+      mat4.invert(mPInv, Rt1);
+
       gl.clear(gl.COLOR_BUFFER_BIT);
-      gl.uniformMatrix4fv(uniMP, false, camera.calcMP());
-      gl.drawArrays(gl.TRIANGLES, 0, vertexPosition.length/3|0);
-      gl.flush();
-    }, 20000, true).start();     
+      gl.uniformMatrix4fv(uniMP, false, mPRt1);
+      gl.uniformMatrix4fv(uniMPInv, false, mPInv);
+      gl.drawElements(gl.TRIANGLES, indexVertex.length, gl.UNSIGNED_SHORT, 0);
+
+    }, 36000*7,  true).start();     
   }
 };
 module.exports = App;
 
-},{"./Animation":4,"./AttributeSetter":6,"./Camera":7,"./ProgramLinker":8,"./ScriptLoader":9,"./ShaderCompiler":10,"./VBOManager":11,"./WindowManager":12,"async":1,"gl-matrix":3}],6:[function(require,module,exports){
-var AttributeSetter = function(gl, program){
-  this.gl = gl;
-  this.program = program;
-};
-
-AttributeSetter.prototype = {
-  "setVertex": function(params){
-    var gl = this.gl,
-        program = this.program,
-        alPosition, i, l;
-    for(i=0, l=params.length; i<l; i++){
-      var p = params[i];
-      gl.bindBuffer(gl.ARRAY_BUFFER, p.vbo);
-      alPosition = gl.getAttribLocation(program, p.name);
-      gl.enableVertexAttribArray(alPosition);
-      gl.vertexAttribPointer(alPosition, p.stride, gl.FLOAT, false, 0, 0);
-      gl.bindBuffer(gl.ARRAY_BUFFER, null);
-    }
-  }
-};
-
-module.exports = AttributeSetter;
-
-},{}],7:[function(require,module,exports){
+},{"./Animation":4,"./Camera":6,"./Easing":7,"./GLUtil":8,"./ScriptLoader":9,"./WindowManager":10,"async":1,"gl-matrix":3}],6:[function(require,module,exports){
 var glMatrix = require("gl-matrix"),
     vec3 = glMatrix.vec3,
     mat4 = glMatrix.mat4;
@@ -5316,14 +5394,91 @@ Camera.prototype = {
 
 module.exports = Camera;
 
-},{"gl-matrix":3}],8:[function(require,module,exports){
-var ProgramLinker = function(gl){
+},{"gl-matrix":3}],7:[function(require,module,exports){
+module.exports = {
+  "easeIn": function(t){
+    return t * t;
+  },
+  "easeIn3": function(t){
+    return t * t * t;
+  },
+  "easeIn4": function(t){
+    return t * t * t * t;
+  },
+  "easeOut": function(t){
+    var _t = 1-t;
+    return 1 - _t * _t;
+  },
+  "easeOut3": function(t){
+    var _t = 1-t;
+    return 1 - _t * _t * _t;
+  },
+  "easeOut4": function(t){
+    var _t = 1-t;
+    return 1 - _t * _t * _t * _t;
+  },
+  "easeInOut": function(t){
+    if(t < 0.5){
+      t = t / 0.5;
+      return t * t * 0.5;
+    }
+    t = t / 0.5 - 1;
+    return (2 - (1-t) * (1-t)) * 0.5;
+  },
+  "attack": function(t, a){
+    return ((1 - t * t) * a + 1) * t;
+  },
+  "roundTrip": function(t){
+    if(t < 0.5){
+      return t / 0.5;
+    }
+    return (1 - t) / 0.5;
+  },
+  "bezier2d3": function(x1, y1, x2, y2, x3, y3, t){
+    var t_ = 1-t;
+    return [
+      x1*t_*t_ + x2*2*t_*t + x3*t*t,
+      y1*t_*t_ + y2*2*t_*t + y3*t*t
+        ];
+  },
+  "bezier2d4": function(x1, y1, x2, y2, x3, y3, x4, y4, t){
+    var t_ = 1-t;
+    return [
+      x1*t_*t_*t_ + x2*3*t_*t_*t + x3*3*t_*t*t + x4*t*t*t,
+      y1*t_*t_*t_ + y2*3*t_*t_*t + y3*3*t_*t*t + y4*t*t*t
+        ];
+  }
+};
+
+
+},{}],8:[function(require,module,exports){
+var GLUtil = function(gl){
   this.gl = gl;
 };
-ProgramLinker.prototype = {
-  "link": function(shaders){
-    var i, l, gl = this.gl;
-    var program = gl.createProgram();
+GLUtil.prototype = {
+  "setIBO": function(program, param){
+    var gl = this.gl,
+        type = gl.ELEMENT_ARRAY_BUFFER,
+        ibo;
+    ibo = gl.createBuffer();
+    gl.bindBuffer(type, ibo);
+    gl.bufferData(type, new Int16Array(param.data), gl.STATIC_DRAW);
+  },
+  "setVBO": function(program, param){
+    var gl = this.gl,
+        type = gl.ARRAY_BUFFER,
+        al, vbo;
+    vbo = gl.createBuffer();
+    gl.bindBuffer(type, vbo);
+    gl.bufferData(type, new Float32Array(param.data), gl.STATIC_DRAW);
+    al = gl.getAttribLocation(program, param.name);
+    gl.enableVertexAttribArray(al);
+    gl.vertexAttribPointer(al, param.stride, gl.FLOAT, false, 0, 0);
+    gl.bindBuffer(type, null);
+  },
+  "linkShaders": function(program, shaders){
+    var gl = this.gl,
+        i, l;
     for(i=0, l=shaders.length; i<l; i++){
       gl.attachShader(program, shaders[i]);
     }
@@ -5335,9 +5490,21 @@ ProgramLinker.prototype = {
     console.log("program link failed");
     console.log(gl.getProgramInfoLog(program));
     return null;
+  },
+  "getShader": function(textSource, type){
+    var gl = this.gl,
+        shader = gl.createShader(type);
+    gl.shaderSource(shader, textSource);
+    gl.compileShader(shader);
+    if(gl.getShaderParameter(shader, gl.COMPILE_STATUS)){
+      return shader;
+    }
+    console.log("compile failed");
+    console.log(gl.getShaderInfoLog(shader));
+    return null;
   }
 };
-module.exports = ProgramLinker;
+module.exports = GLUtil;
 
 },{}],9:[function(require,module,exports){
 var async = require("async");
@@ -5385,42 +5552,6 @@ ScriptLoader.prototype = {
 module.exports = ScriptLoader;
 
 },{"async":1}],10:[function(require,module,exports){
-var ShaderCompiler = function(gl){
-  this.gl = gl;
-};
-ShaderCompiler.prototype = {
-  "compile": function(textSource, type){
-    var gl = this.gl,
-        shader = gl.createShader(type);
-    gl.shaderSource(shader, textSource);
-    gl.compileShader(shader);
-    if(gl.getShaderParameter(shader, gl.COMPILE_STATUS)){
-      return shader;
-    }
-    console.log("compile failed");
-    console.log(gl.getShaderInfoLog(shader));
-    return null;
-  }
-};
-module.exports = ShaderCompiler;
-
-},{}],11:[function(require,module,exports){
-var VBOManager = function(gl){
-  this.gl = gl;
-};
-VBOManager.prototype = {
-  "create": function(data){
-    var gl = this.gl,
-        vbo = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(data), gl.STATIC_DRAW);
-    gl.bindBuffer(gl.ARRAY_BUFFER, null);
-    return vbo;
-  }
-};
-module.exports = VBOManager;
-
-},{}],12:[function(require,module,exports){
 var WindowManager = function(w){
   var dis = this;
   this.w = w;
@@ -5444,10 +5575,10 @@ WindowManager.prototype = {
 
 module.exports = WindowManager;
 
-},{}],13:[function(require,module,exports){
+},{}],11:[function(require,module,exports){
 "use strict";
 var App = require("./app/App.js");
 var app = new App(window, document);
 app.start();
 
-},{"./app/App.js":5}]},{},[13]);
+},{"./app/App.js":5}]},{},[11]);
