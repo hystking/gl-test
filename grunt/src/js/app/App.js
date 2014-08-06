@@ -1,15 +1,14 @@
 var glMatrix = require("gl-matrix"),
     vec3 = glMatrix.vec3,
+    vec4 = glMatrix.vec4,
     mat4 = glMatrix.mat4,
     async = require("async"),
     WindowManager = require("./WindowManager"),
     ScriptLoader = require("./ScriptLoader"),
-    ShaderCompiler = require("./ShaderCompiler"),
-    ProgramLinker = require("./ProgramLinker"),
-    VBOManager = require("./VBOManager"),
-    AttributeSetter = require("./AttributeSetter"),
+    GLUtil = require("./GLUtil"),
     Camera = require("./Camera"),
-    Animation = require("./Animation");
+    Animation = require("./Animation"),
+    Easing = require("./Easing");
 
 var App = function(w){
   this.wm = new WindowManager(w);
@@ -18,9 +17,30 @@ var App = function(w){
 App.prototype = {
   "start": function(callback){
     async.series([
+      this.loadTexture.bind(this),
       this.loadShader.bind(this),
       this.main.bind(this)
     ]);
+  },
+  "loadTexture": function(callback){
+    var dis = this,
+        canvas = document.createElement("canvas"),
+        ctx = canvas.getContext("2d"),
+        imgEarthMap = document.createElement("img");
+    imgEarthMap.src = "./img/earth-map.jpg";
+    imgEarthMap.addEventListener("load", function(){
+      var w = imgEarthMap.width,
+          h = imgEarthMap.height;
+
+      canvas.width = w;
+      canvas.height = h;
+      
+      ctx.drawImage(imgEarthMap, 0, 0, w, h);
+
+      dis.imageDataEarth = ctx.getImageData(0, 0, w, h);
+      callback();
+    });
+    
   },
   "loadShader": function(callback){
     var sl = new ScriptLoader([
@@ -47,19 +67,22 @@ App.prototype = {
     gl.clearColor(0.0, 0.0, 0.0, 1.0);
     gl.clearDepth(1.0);
     gl.enable(gl.CULL_FACE);
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthFunc(gl.LEQUAL);
 
-    var sc = new ShaderCompiler(gl);
-    var vertexShader = sc.compile(
+    var glUtil = new GLUtil(gl);
+
+    var vertexShader = glUtil.getShader(
         document.getElementById("shader-vertex").text,
         gl.VERTEX_SHADER
         );
-    var fragmentShader = sc.compile(
+    var fragmentShader = glUtil.getShader(
         document.getElementById("shader-fragment").text,
         gl.FRAGMENT_SHADER
         );
-
-    var pl = new ProgramLinker(gl);
-    var program = pl.link([
+    var program = gl.createProgram();
+    
+    glUtil.linkShaders(program, [
       vertexShader,
       fragmentShader
     ]);
@@ -70,72 +93,151 @@ App.prototype = {
     vec3.copy(camera.vUp, [0.0, 0.0, 1.0]);
 
     var vertexPosition = [
-      //plane 1
-      1, 1, 1,
-     -1, 1, 1,
-      1,-1, 1,
-     -1,-1, 1,
-      1,-1, 1,
-     -1, 1, 1,
-      //plane 6
-      1, 1,-1,
-      1,-1,-1,
-     -1, 1,-1,
-     -1,-1,-1,
-     -1, 1,-1,
-      1,-1,-1,
-      //plane 2
-      1, 1, 1,
-      1,-1, 1,
-      1, 1,-1,
-      1,-1,-1,
-      1, 1,-1,
-      1,-1, 1,
-      //plane 5
-     -1, 1, 1,
-     -1, 1,-1,
-     -1,-1, 1,
-     -1,-1,-1,
-     -1,-1, 1,
-     -1, 1,-1,
-      //plane 3
-      1, 1, 1,
-      1, 1,-1,
-     -1, 1, 1,
-     -1, 1,-1,
-     -1, 1, 1,
-      1, 1,-1,
-      //plane 4
-      1,-1, 1,
-     -1,-1, 1,
-      1,-1,-1,
-     -1,-1,-1,
-      1,-1,-1,
-     -1,-1, 1,
+      -1, -1, -1,
+      -1, -1,  1,
+      -1,  1, -1,
+      -1,  1,  1,
+       1, -1, -1,
+       1, -1,  1,
+       1,  1, -1,
+       1,  1,  1
     ];
 
-    var vbom = new VBOManager(gl);
-    var vbo = vbom.create(vertexPosition);
-    var as = new AttributeSetter(gl, program);
-    as.setVertex([
-      {
-        vbo: vbo,
-        stride: 3,
-        name: "position"
+    var vertexColor = [
+      1, 0, 0,
+      1, 0, 0,
+      1, 0, 0,
+      1, 0, 0,
+      1, 0, 0,
+      1, 0, 0,
+      1, 0, 0,
+      1, 0, 0,
+    ];
+
+    var indexVertex = [
+      //plane 1
+     7, 3, 5,
+     1, 5, 3,
+      //plane 6
+     6, 4, 2,
+     0, 2, 4,
+      //plane 2
+     7, 5, 6,
+     4, 6, 5,
+      //plane 5
+     3, 2, 1,
+     0, 1, 2,
+      //plane 3
+     7, 6, 3,
+     2, 3, 6,
+      //plane 4
+     5, 1, 4,
+     0, 4, 1,
+    ];
+
+    vertexPosition = [];
+    vertexColor = [];
+    vertexNormal = [];
+
+    var mRot = mat4.create();
+    var vVertex = vec3.create();
+
+    var bunkatsu = 200;
+
+    var imageDataEarth = this.imageDataEarth;
+    var data = imageDataEarth.data;
+    for(var y=0; y<bunkatsu; y++){
+      for(var x=0; x<bunkatsu*2; x++){
+        mat4.identity(mRot);
+        mat4.rotateZ(mRot, mRot, Math.PI/bunkatsu * x);
+        mat4.rotateY(mRot, mRot, Math.PI/(bunkatsu-1) * y);
+        vec3.copy(vVertex, [0, 0, 1]);
+        vec3.transformMat4(vVertex, vVertex, mRot);
+
+        var ix = x/2/bunkatsu * imageDataEarth.width | 0;
+        var iy = y/bunkatsu * imageDataEarth.height | 0;
+        var dataIndex = 4 * (iy * imageDataEarth.width + ix);
+        var r = data[dataIndex]/255;
+        var g = data[dataIndex+1]/255;
+        var b = data[dataIndex+2]/255;
+
+        vertexColor.push(r, g, b);
+        vec3.scale(vVertex, vVertex, 1+Math.random()*0.01+(g-b)*0.15);
+        vertexPosition.push.apply(vertexPosition, vVertex);
+        vertexNormal.push.apply(vertexNormal, vVertex);
       }
-    ]);
+    }
+    indexVertex = [];
+    for(var i=0, len=bunkatsu*2*(bunkatsu-1)-1; i < len; i++){
+       indexVertex.push(
+         i,i+bunkatsu*2,i+1
+       );
+       indexVertex.push(
+         i+1,i+bunkatsu*2,i+bunkatsu*2+1
+       );
+    }
+    indexVertex.push(
+      i,i+bunkatsu,i+1
+    );
+    console.log(indexVertex);
+
+
+    glUtil.setVBO(program, {
+      data: vertexPosition,
+      stride: 3,
+      name: "position"
+    });
+    glUtil.setVBO(program, {
+      data: vertexColor,
+      stride: 3,
+      name: "color"
+    });
+    glUtil.setVBO(program, {
+      data: vertexNormal,
+      stride: 3,
+      name: "normal"
+    });
+    glUtil.setIBO(program, {
+      data: indexVertex
+    });
+
     var uniMP = gl.getUniformLocation(program, "mP");
-    
+    var uniMPInv = gl.getUniformLocation(program, "mPInv");
+
+    var Rt1 = mat4.create();
+    var Rt2 = mat4.create();
+
+    var mPRt1 = mat4.create();
+    var mPRt2 = mat4.create();
+
+    var mPInv = mat4.create();
+    var mP = mat4.create();
+
+    mat4.translate(Rt1, Rt1, [0, 0, 0]);
+    mat4.translate(Rt2, Rt2, [0, -2, 0]);
+
     new Animation(function(t){
-      var rad = t * Math.PI*2;
-      camera.vPosition[0] = Math.cos(rad*3) * 3;
-      camera.vPosition[1] = Math.sin(rad*3) * 3;
-      camera.vPosition[2] = Math.cos(rad*2) * 3;
+      t = t;
+      var rad = t * Math.PI*2 + 0.7;
+      camera.vPosition[0] = Math.cos(rad*7) * 9;
+      camera.vPosition[1] = Math.sin(rad*7) * 9;
+      camera.vPosition[2] = 6;
+
+      mP = camera.calcMP();
+      mat4.identity(Rt1);
+      mat4.identity(mPInv);
+
+      mat4.rotateZ(Rt1, Rt1, -t*Math.PI*50);
+
+      mat4.mul(mPRt1, mP, Rt1);
+      mat4.invert(mPInv, Rt1);
+
       gl.clear(gl.COLOR_BUFFER_BIT);
-      gl.uniformMatrix4fv(uniMP, false, camera.calcMP());
-      gl.drawArrays(gl.TRIANGLES, 0, vertexPosition.length/3|0);
-      gl.flush();
-    }, 20000, true).start();     
+      gl.uniformMatrix4fv(uniMP, false, mPRt1);
+      gl.uniformMatrix4fv(uniMPInv, false, mPInv);
+      gl.drawElements(gl.TRIANGLES, indexVertex.length, gl.UNSIGNED_SHORT, 0);
+
+    }, 36000*7,  true).start();     
   }
 };
 module.exports = App;
