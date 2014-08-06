@@ -27,7 +27,7 @@ App.prototype = {
         canvas = document.createElement("canvas"),
         ctx = canvas.getContext("2d"),
         imgEarthMap = document.createElement("img");
-    imgEarthMap.src = "./img/earth-map.jpg";
+    imgEarthMap.src = "./img/earth-map.png";
     imgEarthMap.addEventListener("load", function(){
       var w = imgEarthMap.width,
           h = imgEarthMap.height;
@@ -138,16 +138,19 @@ App.prototype = {
     vertexPosition = [];
     vertexColor = [];
     vertexNormal = [];
+    indexVertex = [];
 
     var mRot = mat4.create();
     var vVertex = vec3.create();
 
-    var bunkatsu = 200;
+    var bunkatsu = 150;
 
     var imageDataEarth = this.imageDataEarth;
     var data = imageDataEarth.data;
-    for(var y=0; y<bunkatsu; y++){
-      for(var x=0; x<bunkatsu*2; x++){
+
+    var x, y, r, g, b, a, c, d;
+    for(y=0; y<bunkatsu; y++){
+      for(x=0; x<bunkatsu*2; x++){
         mat4.identity(mRot);
         mat4.rotateZ(mRot, mRot, Math.PI/bunkatsu * x);
         mat4.rotateY(mRot, mRot, Math.PI/(bunkatsu-1) * y);
@@ -157,30 +160,36 @@ App.prototype = {
         var ix = x/2/bunkatsu * imageDataEarth.width | 0;
         var iy = y/bunkatsu * imageDataEarth.height | 0;
         var dataIndex = 4 * (iy * imageDataEarth.width + ix);
-        var r = data[dataIndex]/255;
-        var g = data[dataIndex+1]/255;
-        var b = data[dataIndex+2]/255;
+        r = data[dataIndex]/255;
+        g = data[dataIndex+1]/255+0.1;
+        b = data[dataIndex+2]/255;
 
         vertexColor.push(r, g, b);
-        vec3.scale(vVertex, vVertex, 1+Math.random()*0.01+(g-b)*0.15);
-        vertexPosition.push.apply(vertexPosition, vVertex);
+        vec3.scale(vVertex, vVertex, 1+(g-b)*0.2);
         vertexNormal.push.apply(vertexNormal, vVertex);
+        vertexPosition.push.apply(vertexPosition, vVertex);
       }
     }
-    indexVertex = [];
-    for(var i=0, len=bunkatsu*2*(bunkatsu-1)-1; i < len; i++){
-       indexVertex.push(
-         i,i+bunkatsu*2,i+1
-       );
-       indexVertex.push(
-         i+1,i+bunkatsu*2,i+bunkatsu*2+1
-       );
+    var x2, y2;
+    for(y=0; y<bunkatsu-1; y++){
+      for(x=0; x<bunkatsu*2; x++){
+        x2 = (x + 1) % (bunkatsu * 2);
+        y2 = y + 1;
+        a = y * bunkatsu * 2 + x;
+        b = y * bunkatsu * 2 + x2;
+        c = y2 * bunkatsu * 2 + x;
+        d = y2 * bunkatsu * 2 + x2;
+        indexVertex.push(
+            a, c, b,
+            b, c, d
+        );
+      }
     }
+    /*
     indexVertex.push(
       i,i+bunkatsu,i+1
     );
-    console.log(indexVertex);
-
+    */
 
     glUtil.setVBO(program, {
       data: vertexPosition,
@@ -203,6 +212,7 @@ App.prototype = {
 
     var uniMP = gl.getUniformLocation(program, "mP");
     var uniMPInv = gl.getUniformLocation(program, "mPInv");
+    var uniT = gl.getUniformLocation(program, "t");
 
     var Rt1 = mat4.create();
     var Rt2 = mat4.create();
@@ -217,17 +227,17 @@ App.prototype = {
     mat4.translate(Rt2, Rt2, [0, -2, 0]);
 
     new Animation(function(t){
-      t = t;
       var rad = t * Math.PI*2 + 0.7;
       camera.vPosition[0] = Math.cos(rad*7) * 9;
       camera.vPosition[1] = Math.sin(rad*7) * 9;
-      camera.vPosition[2] = 6;
+      camera.vPosition[2] = 6;//Math.sin(rad*7) * 9;
 
       mP = camera.calcMP();
       mat4.identity(Rt1);
       mat4.identity(mPInv);
 
-      mat4.rotateZ(Rt1, Rt1, -t*Math.PI*50);
+      mat4.rotateZ(Rt1, Rt1, -t*Math.PI*6);
+      mat4.rotateX(Rt1, Rt1, 0.38);
 
       mat4.mul(mPRt1, mP, Rt1);
       mat4.invert(mPInv, Rt1);
@@ -235,6 +245,7 @@ App.prototype = {
       gl.clear(gl.COLOR_BUFFER_BIT);
       gl.uniformMatrix4fv(uniMP, false, mPRt1);
       gl.uniformMatrix4fv(uniMPInv, false, mPInv);
+      gl.uniform1fv(uniT, [t]);
       gl.drawElements(gl.TRIANGLES, indexVertex.length, gl.UNSIGNED_SHORT, 0);
 
     }, 36000*7,  true).start();     
